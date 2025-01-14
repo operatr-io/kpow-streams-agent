@@ -11,7 +11,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '8'
+          java-version: '11'
       - name: Install Clojure tools
         uses: DeLaGuardo/setup-clojure@13.0
         with:
@@ -19,3 +19,5 @@ jobs:
       - run: lein kaocha
       - run: lein kondo
       - run: lein fmt
+      - name: Lint javadoc
+        run: ./scripts/javadoc.sh

@@ -9,10 +9,8 @@ jobs:
         uses: DeLaGuardo/setup-clojure@13.0
         with:
           lein: 'latest'
-      - name: "Build JAR files"
-        run: lein uberjar
       - name: "Generate pom.xml"
-        run: lein pom
+        run: lein with-profile +mvn-deploy pom
       - name: Set up Maven Central Repository
         uses: actions/setup-java@v4
         with:
@@ -24,7 +22,13 @@ jobs:
           gpg-private-key: ${{ secrets.GPG_SIGNING_KEY }}
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
       - name: Publish package
-        run: mvn --batch-mode -Dsource=11 -Dtarget=11 -Dmaven.compiler.source=11 -Dmaven.compiler.target=11 deploy
+        run: |
+          mvn --batch-mode \
+          -Dsource=1.8 \
+          -Dtarget=1.8 \
+          -Dmaven.compiler.source=1.8 \
+          -Dmaven.compiler.target=1.8 \
+          deploy
         env:
           MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}

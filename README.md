@@ -1,5 +1,7 @@
 [![test](https://github.com/factorhouse/kpow-streams-agent/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/factorhouse/kpow-streams-agent/actions/workflows/test.yml)
-[![Maven Central](https://img.shields.io/maven-central/v/io.operatr/kpow-streams-agent.svg?label=Maven%20Central)](https://search.maven.org/search?q=g:%22io.operatr%22%20AND%20a:%22kpow-streams-agent%22)
+[![Maven Central](https://img.shields.io/maven-central/v/io.factorhouse/kpow-streams-agent.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/io.factorhouse/kpow-streams-agent)
+[![javadoc](https://javadoc.io/badge2/io.factorhouse/kpow-streams-agent/javadoc.svg)](https://javadoc.io/doc/io.factorhouse/kpow-streams-agent)
+
 
 # Kpow Streams Agent
 
@@ -55,21 +57,25 @@ In your application, just before you start your KafkaStreams instance:
 
 ```java 
 import io.factorhouse.kpow.StreamsRegistry;
+import io.factorhouse.kpow.key.ClusterIdKeyStrategy;
 
 // Your Kafka Streams topology
-Topology topology = createMyTopology(); 
+Topology topology = createMyTopology();
 
 // Your Kafka Streams config
 Properties props = new createMyStreamProperties();
- 
+
 // Your Kafka Streams instance
-KafkaStreams streams = new KafkaStreams(topology, props); 
+KafkaStreams streams = new KafkaStreams(topology, props);
 
 // Create a Kpow StreamsRegistry
 StreamsRegistry registry = new StreamsRegistry(props);
 
+// Specify the key strategy when writing metrics to the internal Kafka topic
+KeyStrategy keyStrategy = new ClusterIdKeyStrategy(props);
+
 // Register your KafkaStreams and Topology instances with the StreamsRegistry
-registry.register(streams, topology); 
+registry.register(streams, topology, keyStrategy);
 
 // Start your Kafka Streams application
 streams.start();
@@ -82,7 +88,39 @@ The StreamsRegistry is a *single-threaded process* that performs these actions *
 
 The StreamsRegistry **does not talk directly to Kpow**. Kpow reads streams data from the snapshot topic.
 
-# Configuration
+# Metric filters
+
+You can configure each streams registry with metric filters, which give you greater control over which metrics Kpow's streams agent will export.
+
+Metric filters can be chained and added programmatically:
+
+```java
+import io.factorhouse.kpow.StreamsRegistry;
+import io.factorhouse.kpow.MetricFilter;
+
+MetricFilter metricFilter = MetricFilter().deny(); // don't send any streams metrics, just send through the Streams Topology
+
+// ..
+
+StreamsRegistry registry = new StreamsRegistry(props, metricFilter);
+```
+
+If you pass no metric filters to the `StreamsRegistry` constructor then the default metric filter will be used. The default metric filter will **accept** all metrics to be exported.
+
+### Metric filter usage
+
+Kpow's streams agent metric filters work very similar to Micrometer's [meter filters](https://github.com/micrometer-metrics/micrometer-docs/blob/main/src/docs/concepts/meter-filters.adoc).
+
+Metric filters can either `ACCEPT` or `DENY` a metric. The filter itself is a Java predicate which takes in the [org.apache.common.MetricName](https://kafka.apache.org/0110/javadoc/org/apache/kafka/common/MetricName.html#group()) class. This allows you to filter metrics by name, tags or group.
+
+Metric filters are applied sequentially in the order they are configured in the registry. This allows for stacking of deny and accept filters to create more complex rules:
+
+```java
+MetricFilter metricFilter = MetricFilter().acceptNameStartsWith("rocksdb").deny();
+```
+The above example allows all rocksdb related metrics through and denies all other types of streams metrics.
+
+# Kafka connection
 
 The `StreamsRegistry` `Properties` contains configuration to create the snapshot producer.
 
@@ -121,6 +159,48 @@ Producer configuration means any of the following fields:
 
 For more details visit the [Producer](https://kafka.apache.org/documentation/#producerconfigs) section of the Apache Kafka documentation.
 
+### Key strategy
+
+The keying strategy for data sent from Kpow's streams agent to its internal Kafka topic is configurable. The key strategy plays an important role in enabling Kpow to align stream metrics with the UI accurately. There are many key strategies available depending on your organisation's deployment.
+
+#### Cluster ID (recommended key strategy, requires Kpow 94.1+)
+
+The default key strategy uses the cluster ID, obtained via an AdminClient [describeClusters](https://kafka.apache.org/23/javadoc/org/apache/kafka/clients/admin/DescribeClusterResult.html) call. This AdminClient is created once during registry initialization and then closed. If you prefer not to have the streams registry create an AdminClient—either because your Kafka variant does not provide a cluster ID or due to security considerations—you may select an alternative key strategy from the options below.
+
+```java
+// Specify the key strategy when writing metrics to the internal Kafka topic
+// props are java.util.Properties describing the Kafka Connection
+KeyStrategy keyStrategy = new ClusterIDKeyStrategy(props);
+// Register your KafkaStreams and Topology instances with the StreamsRegistry
+registry.register(streams, topology, keyStrategy);
+```
+
+#### Client ID (default in 0.2.0 and below)
+
+This key strategy relies on the client ID and application ID from the active KafkaStreams instance, eliminating the need for an AdminClient. However, in a multi-cluster Kpow deployment where the same application ID is used across multiple environments (e.g., staging, dev, prod), Kpow cannot determine which cluster the Kafka Streams instance is associated with.
+
+```java
+
+import io.factorhouse.kpow.key.ClientIdKeyStrategy;
+
+KeyStrategy keyStrategy = new ClientIdKeyStrategy();
+registry.register(streams, topology, keyStrategy);
+```
+
+#### Environment name (manual, requires Kpow 94.1+)
+
+If you have set a UI-friendly cluster name using the `ENVIRONMENT_NAME` environment variable in Kpow, you can use this environment name as the keying strategy for the streams agent.
+
+```java
+
+
+// This sets a manual key of `Trade Book (Staging)`, the name of the clusters environment name in Kpow's UI.
+KeyStrategy keyStrategy = new ManualKeyStrategy("Trade Book (Staging)");
+registry.
+
+        register(streams, topology, keyStrategy);
+```
+
 ### Minimum Required ACLs
 
 If you secure your Kafka Cluster with ACLs, the user provided in the Producer configuration must have permission to write to the internal Kpow topic.
@@ -147,7 +227,7 @@ Properties streamsProps = new Properties();
 KafkaStreams streams = new KafkaStreams(topology, streamsProps);
 
 StreamsRegistry registry = new StreamsRegistry(streamsProps);
-...
+//...
 ```
 
 ### Multi-Cluster Kpow
@@ -160,7 +240,7 @@ KafkaStreams streams = new KafkaStreams(topology, streamsProps);
 
 Properties primaryProps = createMyPrimaryClusterProducerProperties();
 StreamsRegistry registry = new StreamsRegistry(primaryProps);
-...
+//...
 ```
 
 See the [Kpow Multi-Cluster Feature Guide](https://docs.factorhouse.io/kpow-ee/config/multi-cluster/) for more information.
